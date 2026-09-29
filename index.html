@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Sabyx Atlas — Your information, mapped.</title>
+<meta name="description" content="Sabyx Atlas is a local-first visual information mapping app by Sabyx Labs.">
+<meta name="theme-color" content="#0e1116" id="metaTheme">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+<script>try{var t=localStorage.getItem('atlas-theme')||'dark';document.documentElement.dataset.theme=t==='system'?(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'):t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <button class="ib menu" id="bMenu" aria-label="Open navigation"><i data-i="menu"></i></button>
+  <div class="brand"><b>SABYX ATLAS</b><small>Your information, mapped.</small></div>
+  <div class="acts">
+    <button class="ib" id="bSearch" aria-label="Search (Ctrl+K)" title="Search (Ctrl+K)"><i data-i="search"></i></button>
+    <button class="ib pri" id="bAdd" aria-label="Add node" title="Add node"><i data-i="plus"></i></button>
+    <button class="ib" id="bImport" aria-label="Import CSV" title="Import CSV"><i data-i="up"></i></button>
+    <button class="ib" id="bExport" aria-label="Export and backup" title="Export &amp; backup"><i data-i="down"></i></button>
+    <button class="ib" id="bSettings" aria-label="Settings" title="Settings"><i data-i="gear"></i></button>
+  </div>
+</header>
+
+<div class="app">
+  <div class="backdrop" id="backdrop"></div>
+  <nav class="side" id="side" aria-label="Main navigation">
+    <button class="nb" data-act="atlas">◎ Atlas</button>
+    <button class="nb" data-type="">▦ All Nodes</button>
+    <button class="nb" data-type="Person">👤 People</button>
+    <button class="nb" data-type="Organization">🏢 Organizations</button>
+    <button class="nb" data-type="Project">🚀 Projects</button>
+    <button class="nb" data-type="Note">📝 Notes</button>
+    <button class="nb" data-type="Document">📄 Documents</button>
+    <button class="nb" data-type="Idea">💡 Ideas</button>
+    <button class="nb" data-type="Task">✅ Tasks</button>
+    <button class="nb" data-type="Event">📅 Events</button>
+    <button class="nb" data-type="Finance">💰 Finance</button>
+    <h6>Data</h6>
+    <button class="nb" data-act="import">Import CSV</button>
+    <button class="nb" data-act="data">Export CSV</button>
+    <button class="nb" data-act="backup">Backup JSON</button>
+    <button class="nb" data-act="restore">Restore JSON</button>
+    <h6>Settings</h6>
+    <button class="nb" data-act="settings">Appearance</button>
+    <button class="nb" data-act="data">Data</button>
+    <button class="nb" data-act="settings">About</button>
+    <p class="foot">© 2026 Sabyx Labs · Built by Sabyasachi Mondal</p>
+  </nav>
+
+  <main class="main">
+    <div class="fbar" id="fbar" role="group" aria-label="Filters">
+      <select id="fType" aria-label="Filter by type"><option value="">All types</option></select>
+      <select id="fTag" aria-label="Filter by tag"><option value="">All tags</option></select>
+      <select id="fConn" aria-label="Filter by connections"><option value="">Any connections</option><option value="y">Connected only</option><option value="n">Unconnected only</option></select>
+      <label class="dt">Since <input type="date" id="fDate"></label>
+      <button class="txt" id="fClear">Clear filters</button>
+      <span class="mut" id="fCount" aria-live="polite"></span>
+    </div>
+    <div class="canvas" id="canvas">
+      <svg id="atlas" role="application" aria-label="Atlas canvas. Drag to pan, scroll to zoom." xmlns="http://www.w3.org/2000/svg"><g id="world"></g></svg>
+      <div class="stats" id="stats"></div>
+      <div class="banner" id="banner" hidden></div>
+      <div class="tools">
+        <button class="ib" id="tIn" aria-label="Zoom in"><i data-i="plus"></i></button>
+        <button class="ib" id="tOut" aria-label="Zoom out"><i data-i="minus"></i></button>
+        <button class="ib" id="tFit" aria-label="Reset view" title="Reset view"><i data-i="fit"></i></button>
+        <button class="ib" id="tConn" aria-label="Connect selected node" title="Connect"><i data-i="link"></i></button>
+        <button class="ib" id="tFocus" aria-label="Focus mode" title="Focus mode"><i data-i="target"></i></button>
+      </div>
+      <div class="empty" id="empty" hidden>
+        <svg viewBox="0 0 220 110" class="demo" aria-hidden="true"><path d="M50 55L110 25M110 25L170 55M50 55L170 55" /><circle cx="50" cy="55" r="9"/><circle cx="110" cy="25" r="9"/><circle cx="170" cy="55" r="9"/></svg>
+        <h1>Your Atlas is empty.</h1>
+        <p>Start by creating your first piece of information.</p>
+        <div class="row"><button class="btn pri" id="eAdd">+ Create Node</button><button class="btn" id="eImport">Import CSV</button><button class="btn" id="eDemo">Load Demo Atlas</button></div>
+        <small class="mut" id="eNote">Your Atlas data is stored locally on this device.</small>
+      </div>
+    </div>
+  </main>
+
+  <aside class="detail" id="detail" hidden aria-label="Node details"></aside>
+</div>
+
+<!-- Add node -->
+<dialog id="dlgNode"><form id="fNode" class="dlg">
+  <h2>Add node</h2>
+  <label>Name<input name="name" required maxlength="120" autocomplete="off"></label>
+  <label>Description<textarea name="description" rows="2" maxlength="1000"></textarea></label>
+  <div class="two"><label>Type<select name="type" id="nType"></select></label><label>Date<input type="date" name="date"></label></div>
+  <label>Tags <small class="mut">comma separated</small><input name="tags" autocomplete="off"></label>
+  <div class="row end"><button type="button" class="btn" data-close>Cancel</button><button class="btn pri">Create Node</button></div>
+</form></dialog>
+
+<!-- Relationship -->
+<dialog id="dlgRel"><form id="fRel" class="dlg">
+  <h2>Connect nodes</h2>
+  <p id="relInfo" class="mut"></p>
+  <label>Relationship<select id="rSel"></select></label>
+  <label id="rCustomL" hidden>Custom relationship<input id="rCustom" maxlength="60"></label>
+  <div class="row end"><button type="button" class="btn" data-close>Cancel</button><button class="btn pri">Connect</button></div>
+</form></dialog>
+
+<!-- Settings -->
+<dialog id="dlgSet"><div class="dlg">
+  <div class="dh"><h2>Settings</h2><button class="ib" data-close aria-label="Close"><i data-i="x"></i></button></div>
+  <fieldset><legend>Appearance</legend>
+    <label class="rad"><input type="radio" name="theme" value="dark"> Dark</label>
+    <label class="rad"><input type="radio" name="theme" value="light"> Light</label>
+    <label class="rad"><input type="radio" name="theme" value="system"> Follow system</label>
+  </fieldset>
+  <fieldset><legend>Atlas</legend>
+    <label class="rad"><input type="checkbox" id="sLabels"> Show relationship labels</label>
+    <label class="rad"><input type="checkbox" id="sAnim"> Animations</label>
+    <label>Default node layout (imports)<select id="sLayout"><option value="circle">Circle</option><option value="grid">Grid</option></select></label>
+  </fieldset>
+  <fieldset><legend>Data</legend>
+    <div class="row"><button class="btn" id="sData">Export &amp; backup…</button><button class="btn danger" id="sClear">Clear all data</button></div>
+  </fieldset>
+  <fieldset><legend>About</legend>
+    <p><b>Sabyx Atlas</b><br><span class="mut">Your information, mapped.</span></p>
+    <p class="mut">Built by Sabyasachi Mondal<br>© 2026 Sabyx Labs<br>Your Atlas data is stored locally on this device.</p>
+    <button class="btn" id="bInstall" hidden>Install app</button>
+  </fieldset>
+</div></dialog>
+
+<!-- Data tools -->
+<dialog id="dlgData"><div class="dlg">
+  <div class="dh"><h2>Export &amp; backup</h2><button class="ib" data-close aria-label="Close"><i data-i="x"></i></button></div>
+  <div class="list">
+    <button class="btn" id="xNodes">Export Nodes (CSV)</button>
+    <button class="btn" id="xRels">Export Relationships (CSV)</button>
+    <button class="btn" id="xJson">Backup JSON</button>
+    <button class="btn" id="xRestore">Restore JSON…</button>
+    <button class="btn" id="xImport">Import CSV…</button>
+    <button class="btn" id="xDemo">Load Demo Atlas</button>
+  </div>
+</div></dialog>
+
+<!-- Confirm -->
+<dialog id="dlgConf"><form method="dialog" class="dlg">
+  <p id="cMsg"></p>
+  <div class="row end"><button value="cancel" class="btn">Cancel</button><button type="button" class="btn" id="cAlt" hidden></button><button value="ok" class="btn pri" id="cOk">Confirm</button></div>
+</form></dialog>
+
+<!-- Summary -->
+<dialog id="dlgSum"><div class="dlg">
+  <h2 id="sumT"></h2><div id="sumB"></div>
+  <div class="row end"><button class="btn pri" data-close>Done</button></div>
+</div></dialog>
+
+<!-- Palette -->
+<dialog id="dlgPal" class="pal"><div>
+  <input id="pIn" placeholder="Search nodes, tags, types, relationships…" aria-label="Search" autocomplete="off">
+  <div id="pRes" role="listbox" aria-label="Results"></div>
+</div></dialog>
+
+<input type="file" id="fileCsv" accept=".csv,text/csv" hidden>
+<input type="file" id="fileJson" accept=".json,application/json" hidden>
+<div id="toasts" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
