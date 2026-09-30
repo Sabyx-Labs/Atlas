@@ -31,7 +31,8 @@ const ICONS = {
   menu:'<path d="M4 7h16M4 12h16M4 17h16"/>', x:'<path d="M6 6l12 12M18 6 6 18"/>',
   link:'<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 10 18.7l1-1"/>',
   target:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>', trash:'<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
-  fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'
+  fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  app:'<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M12 18h.01"/>'
 };
 const hydrate = root => $$('i[data-i]', root).forEach(i => { i.outerHTML = `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[i.dataset.i] || ''}</svg>`; });
 
@@ -39,9 +40,13 @@ const hydrate = root => $$('i[data-i]', root).forEach(i => { i.outerHTML = `<svg
 let db;
 const dbOpen = () => new Promise((res, rej) => {
   if (!window.indexedDB) return rej(new Error('IndexedDB unavailable'));
-  const r = indexedDB.open('sabyx-atlas', 1);
-  r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('nodes', {keyPath:'id'}); d.createObjectStore('relationships', {keyPath:'id'}); d.createObjectStore('settings', {keyPath:'key'}); };
-  r.onsuccess = () => res(r.result);
+  const r = indexedDB.open('sabyx-atlas', 2);
+  r.onupgradeneeded = () => {
+    const d = r.result;
+    for (const [s, k] of [['nodes','id'],['relationships','id'],['settings','key']]) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, {keyPath:k});
+    if (!d.objectStoreNames.contains('files')) d.createObjectStore('files', {keyPath:'id'}).createIndex('nodeId', 'nodeId');
+  };
+  r.onsuccess = () => { r.result.onversionchange = () => r.result.close(); res(r.result); };
   r.onerror = () => rej(r.error);
 });
 const dbTx = (stores, fn) => new Promise((res, rej) => {
@@ -54,14 +59,60 @@ async function persist(fn) { try { await fn(); return true; } catch (e) { consol
 const saveNodes = list => persist(() => dbTx('nodes', s => list.forEach(n => s.put(n))));
 const saveRels = list => persist(() => dbTx('relationships', s => list.forEach(r => s.put(r))));
 const saveSettings = () => persist(() => dbTx('settings', s => s.put({key:'app', value:S.settings})));
-const replaceAll = (nodes, rels) => persist(() => dbTx(['nodes','relationships'], ([a, b]) => { a.clear(); b.clear(); nodes.forEach(n => a.put(n)); rels.forEach(r => b.put(r)); }));
+const replaceAll = (nodes, rels, files = []) => persist(() => dbTx(['nodes','relationships','files'], ([a, b, c]) => { a.clear(); b.clear(); c.clear(); nodes.forEach(n => a.put(n)); rels.forEach(r => b.put(r)); files.forEach(f => c.put(f)); }));
+
+// DOCUMENTS & TYPE FIELDS
+const MAXF = 25 * 1024 * 1024;
+const filesOf = id => new Promise(res => { try { const r = db.transaction('files').objectStore('files').index('nodeId').getAll(id); r.onsuccess = () => res(r.result); r.onerror = () => res([]); } catch (e) { res([]); } });
+const fmtSize = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+const fileIcon = n => /\.(png|jpe?g|gif|webp|svg)$/i.test(n) ? '🖼️' : /\.pdf$/i.test(n) ? '📕' : /\.(xlsx?|csv)$/i.test(n) ? '📊' : /\.(docx?|txt|md)$/i.test(n) ? '📝' : '📄';
+async function addFiles(nodeId, list) {
+  const ok = list.filter(f => f.size <= MAXF), big = list.length - ok.length;
+  if (big) toast(`${big} file(s) over 25 MB skipped`, 'err');
+  const recs = ok.map(f => ({id:uid('f'), nodeId, name:f.name, type:f.type || 'application/octet-stream', size:f.size, blob:f, addedAt:now()}));
+  if (recs.length && await persist(() => dbTx('files', s => recs.forEach(r => s.put(r))))) toast(`${recs.length} document${recs.length > 1 ? 's' : ''} attached`);
+}
+async function loadFiles(id) {
+  const list = await filesOf(id), box = $('#dFiles'); if (!box || S.sel !== id) return;
+  box.innerHTML = list.length ? list.map(f => `<div class="file"><span>${fileIcon(f.name)}</span><div class="fn"><b title="${escH(f.name)}">${escH(clip(f.name, 26))}</b><small>${fmtSize(f.size)}</small></div><button class="ib sm" data-fid="${escH(f.id)}" data-fa="open" aria-label="Download ${escH(f.name)}"><i data-i="down"></i></button><button class="ib sm" data-fid="${escH(f.id)}" data-fa="del" aria-label="Remove ${escH(f.name)}"><i data-i="trash"></i></button></div>`).join('') : '<p class="mut small">No documents attached yet.</p>';
+  hydrate(box);
+}
+async function fileAction(fid, a) {
+  const rec = await new Promise(res => { const r = db.transaction('files').objectStore('files').get(fid); r.onsuccess = () => res(r.result); r.onerror = () => res(null); });
+  if (!rec) return;
+  if (a === 'open') { const url = URL.createObjectURL(rec.blob), l = document.createElement('a'); l.href = url; l.download = rec.name; document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(url), 3000); }
+  else if (await ask(`Remove “${rec.name}” from this node?`, 'Remove') && await persist(() => dbTx('files', s => s.delete(fid)))) { toast('Document removed'); loadFiles(rec.nodeId); }
+}
+const FIELDS = {
+  Person:[['phone','Phone','tel'],['email','Email','email'],['address','Address','area']],
+  Organization:[['website','Website','url'],['phone','Phone','tel'],['email','Email','email'],['address','Address','area']],
+  Project:[['status','Status','sel:Planned|Active|On hold|Done'],['dueDate','Due date','date']],
+  Note:[], Document:[['docType','Document type','text'],['reference','Reference no.','text']],
+  Idea:[['stage','Stage','sel:Raw|Exploring|Approved']],
+  Task:[['status','Status','sel:To do|In progress|Done'],['priority','Priority','sel:Low|Medium|High'],['dueDate','Due date','date']],
+  Event:[['location','Location','text'],['time','Time','time'],['address','Address','area']],
+  Finance:[['amount','Amount','number'],['currency','Currency','text'],['payStatus','Payment status','sel:Pending|Paid|Overdue']],
+  Custom:[]
+};
+const FKEYS = [...new Set(Object.values(FIELDS).flat().map(f => f[0]))];
+const FLABEL = Object.fromEntries(Object.values(FIELDS).flat().map(f => [f[0], f[1]]));
+const sanFields = (t, f) => { const o = {}; if (f && typeof f === 'object') for (const [k] of FIELDS[TYPES[t] ? t : 'Custom']) if (f[k] != null && String(f[k]).trim()) o[k] = String(f[k]).trim().slice(0, 300); return o; };
+function fieldInputs(type, vals = {}) {
+  return (FIELDS[type] || []).map(([k, l, t]) => {
+    const v = escH(vals[k] || '');
+    if (t === 'area') return `<label>${l}<textarea data-f="${k}" rows="2" maxlength="300">${v}</textarea></label>`;
+    if (t.startsWith('sel:')) return `<label>${l}<select data-f="${k}"><option value=""></option>${t.slice(4).split('|').map(o => `<option${o === vals[k] ? ' selected' : ''}>${o}</option>`).join('')}</select></label>`;
+    return `<label>${l}<input data-f="${k}" type="${t}"${t === 'number' ? ' step="any"' : ''} maxlength="200" value="${v}"></label>`;
+  }).join('');
+}
+const readFields = (root, type) => { const o = {}; for (const [k] of FIELDS[type] || []) { const e = $(`[data-f="${k}"]`, root); if (e && e.value.trim()) o[k] = e.value.trim(); } return o; };
 
 // NODES
 function sanNode(o) {
   if (!o || typeof o.id !== 'string' || !o.id || typeof o.name !== 'string' || !o.name.trim()) return null;
   const t = typeof o.createdAt === 'string' && !isNaN(Date.parse(o.createdAt)) ? o.createdAt : now();
   return {
-    id:o.id, name:o.name.trim().slice(0, 200), description:String(o.description || '').slice(0, 1000),
+    id:o.id, fields:sanFields(o.type, o.fields), name:o.name.trim().slice(0, 200), description:String(o.description || '').slice(0, 1000),
     type:TYPES[o.type] ? o.type : 'Custom', tags:Array.isArray(o.tags) ? parseTags(o.tags.join(',')) : [],
     date:/^\d{4}-\d{2}-\d{2}$/.test(o.date) ? o.date : '', x:Number.isFinite(o.x) ? o.x : null, y:Number.isFinite(o.y) ? o.y : null,
     createdAt:t, updatedAt:typeof o.updatedAt === 'string' && !isNaN(Date.parse(o.updatedAt)) ? o.updatedAt : t
@@ -86,10 +137,11 @@ function layout(list) {
 }
 async function createNode(d) {
   const t = now(), c = viewCenter();
-  const n = {id:uid('n'), name:d.name.trim(), description:d.description.trim(), type:d.type, tags:parseTags(d.tags), date:d.date || '',
+  const n = {id:uid('n'), fields:d.fields || {}, name:d.name.trim(), description:d.description.trim(), type:d.type, tags:parseTags(d.tags), date:d.date || '',
     x:c.x - W / 2 + (Math.random() - .5) * 90, y:c.y - H / 2 + (Math.random() - .5) * 90, createdAt:t, updatedAt:t};
   S.nodes.push(n);
   if (!(await saveNodes([n]))) { S.nodes.pop(); return; }
+  if (d.files && d.files.length) await addFiles(n.id, d.files);
   clearFilters(true); S.newId = n.id; S.sel = n.id;
   renderAll(); centerOn(n.id); toast('Node created');
   setTimeout(() => { S.newId = null; }, 600);
@@ -102,7 +154,8 @@ async function deleteNode(id) {
   const n = S.byId.get(id); if (!n) return;
   const links = S.rels.filter(r => r.from === id || r.to === id);
   if (!(await ask(`Delete “${n.name}”${links.length ? ` and its ${links.length} connection(s)` : ''}? This cannot be undone.`, 'Delete'))) return;
-  const ok = await persist(() => dbTx(['nodes','relationships'], ([a, b]) => { a.delete(id); links.forEach(r => b.delete(r.id)); }));
+  const fl = await filesOf(id);
+  const ok = await persist(() => dbTx(['nodes','relationships','files'], ([a, b, c]) => { a.delete(id); links.forEach(r => b.delete(r.id)); fl.forEach(f => c.delete(f.id)); }));
   if (!ok) return;
   S.nodes = S.nodes.filter(x => x.id !== id); S.rels = S.rels.filter(r => r.from !== id && r.to !== id);
   if (S.focus === id) setFocus(null);
@@ -173,12 +226,11 @@ function renderAtlas() {
     const cls = 'node' + (n.id === sel ? ' sel' : '') + (sel && n.id !== sel && !nb.has(n.id) ? ' dim' : '') + (n.id === S.newId ? ' new' : '');
     const g = svgEl('g', {class:cls, 'data-id':n.id, tabindex:0, role:'button', 'aria-label':`${n.type}: ${n.name}, ${d} connection${d === 1 ? '' : 's'}`}, gN);
     svgEl('rect', {class:'card', width:W, height:H, rx:10}, g);
-    svgEl('rect', {width:4, height:H - 20, x:0, y:10, rx:2, fill:t.c}, g);
+    svgEl('rect', {x:12, y:12, width:30, height:30, rx:9, fill:t.c, 'fill-opacity':.2}, g);
     const put = (cl, x, y, txt, extra = {}) => { const e = svgEl('text', {class:cl, x, y, ...extra}, g); e.textContent = txt; };
-    put('ic', 14, 29, t.i); put('nm', 38, 27, clip(n.name, 19));
-    if (n.description) put('ds', 14, 47, clip(n.description, 27));
-    put('ty', 14, 66, n.type.toUpperCase());
-    put('ds', W - 12, 66, d ? `${d} link${d === 1 ? '' : 's'}` : '', {'text-anchor':'end'});
+    put('ic', 27, 33, t.i, {'text-anchor':'middle'}); put('nm', 52, 26, clip(n.name, 14)); put('ty', 52, 39, n.type.toUpperCase());
+    if (d) put('ds', W - 12, 26, `⛓ ${d}`, {'text-anchor':'end'});
+    const sub = n.description || Object.values(n.fields || {})[0] || ''; if (sub) put('ds', 14, 64, clip(sub, 28));
     nodeEls.set(n.id, g);
   }
   positionAll();
@@ -274,17 +326,17 @@ svg.addEventListener('pointerup', endPtr); svg.addEventListener('pointercancel',
 svg.addEventListener('wheel', e => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * .0015), e.clientX, e.clientY); }, {passive:false});
 svg.addEventListener('keydown', e => {
   const g = e.target.closest && e.target.closest('.node');
-  if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); if (S.connectFrom) { if (g.dataset.id !== S.connectFrom) pickTarget(g.dataset.id); } else select(g.dataset.id); }
+  if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); if (S.connectFrom) { if (g.dataset.id !== S.connectFrom) pickTarget(g.dataset.id); } else { const id = g.dataset.id; select(id); nodeEls.get(id)?.focus(); } }
 });
 
 // CSV
 function parseCSV(t) {
-  t = t.replace(/^\uFEFF/, ''); const rows = []; let r = [], f = '', q = false;
+  t = t.replace(/^\uFEFF/, ''); const first = t.split(/\r?\n/, 1)[0], D = [',', ';', '\t'].reduce((a, c) => first.split(c).length > first.split(a).length ? c : a, ','); const rows = []; let r = [], f = '', q = false;
   for (let i = 0; i < t.length; i++) {
     const c = t[i];
     if (q) { if (c === '"') { if (t[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
     else if (c === '"') q = true;
-    else if (c === ',') { r.push(f); f = ''; }
+    else if (c === D) { r.push(f); f = ''; }
     else if (c === '\n' || c === '\r') { if (c === '\r' && t[i + 1] === '\n') i++; r.push(f); f = ''; rows.push(r); r = []; }
     else f += c;
   }
@@ -300,7 +352,7 @@ function download(name, text, mime) {
 }
 const stamp = () => new Date().toISOString().slice(0, 10);
 function exportNodes() {
-  download(`sabyx-atlas-nodes-${stamp()}.csv`, toCSV([['ID','Name','Type','Description','Tags','Date','CreatedAt','UpdatedAt'], ...S.nodes.map(n => [n.id, n.name, n.type, n.description, n.tags.join(';'), n.date, n.createdAt, n.updatedAt])]), 'text/csv');
+  download(`sabyx-atlas-nodes-${stamp()}.csv`, toCSV([['ID','Name','Type','Description','Tags','Date','CreatedAt','UpdatedAt', ...FKEYS.map(k => FLABEL[k])], ...S.nodes.map(n => [n.id, n.name, n.type, n.description, n.tags.join(';'), n.date, n.createdAt, n.updatedAt, ...FKEYS.map(k => (n.fields || {})[k] || '')])]), 'text/csv');
   toast('Nodes exported');
 }
 function exportRels() {
@@ -330,7 +382,7 @@ async function importNodes(rows, ix) {
     let id = get(r, 'id'); if (!id || ids.has(id)) id = uid('n'); ids.add(id);
     const date = get(r, 'date'), c = get(r, 'createdat'), u = get(r, 'updatedat');
     const t = c && !isNaN(Date.parse(c)) ? new Date(c).toISOString() : now();
-    fresh.push({id, name:name.slice(0, 200), description:get(r, 'description').slice(0, 1000), type:tp, tags:parseTags(get(r, 'tags')), date:/^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '', x:null, y:null, createdAt:t, updatedAt:u && !isNaN(Date.parse(u)) ? new Date(u).toISOString() : t});
+    fresh.push({id, fields:sanFields(tp, Object.fromEntries(FKEYS.map(k => [k, get(r, FLABEL[k].toLowerCase())]))), name:name.slice(0, 200), description:get(r, 'description').slice(0, 1000), type:tp, tags:parseTags(get(r, 'tags')), date:/^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '', x:null, y:null, createdAt:t, updatedAt:u && !isNaN(Date.parse(u)) ? new Date(u).toISOString() : t});
   });
   layout(fresh);
   if (fresh.length) { if (!(await saveNodes(fresh))) return; S.nodes.push(...fresh); clearFilters(true); renderAll(); fit(); }
@@ -359,9 +411,14 @@ function summary(title, msg, html, issues = []) {
 }
 
 // JSON BACKUP
-function backupJSON() {
-  download(`sabyx-atlas-backup-${stamp()}.json`, JSON.stringify({version:1, exportedAt:now(), nodes:S.nodes, relationships:S.rels, settings:S.settings}, null, 2), 'application/json');
-  toast('Backup created');
+const toDataURL = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(b); });
+async function backupJSON() {
+  try {
+    const files = [];
+    for (const f of await dbAll('files')) files.push({id:f.id, nodeId:f.nodeId, name:f.name, type:f.type, size:f.size, addedAt:f.addedAt, data:await toDataURL(f.blob)});
+    download(`sabyx-atlas-backup-${stamp()}.json`, JSON.stringify({version:1, exportedAt:now(), nodes:S.nodes, relationships:S.rels, files, settings:S.settings}, null, 2), 'application/json');
+    toast('Backup created');
+  } catch (e) { console.error(e); toast('Backup failed. Please try again.', 'err'); }
 }
 function validateBackup(o) {
   if (!o || typeof o !== 'object' || !Array.isArray(o.nodes) || !Array.isArray(o.relationships)) throw new Error('bad');
@@ -372,8 +429,9 @@ function validateBackup(o) {
   for (const r of o.relationships) {
     if (validRel(r) && seen.has(r.from) && seen.has(r.to) && !rs.has(r.id)) { rs.add(r.id); rels.push({id:r.id, from:r.from, to:r.to, label:r.label.trim().slice(0, 60), createdAt:typeof r.createdAt === 'string' ? r.createdAt : now()}); } else dropped++;
   }
+  const files = Array.isArray(o.files) ? o.files.filter(f => f && typeof f.id === 'string' && seen.has(f.nodeId) && typeof f.data === 'string' && f.data.startsWith('data:')) : [];
   const s = o.settings && typeof o.settings === 'object' ? o.settings : {};
-  return {nodes, rels, dropped, settings:{theme:['dark','light','system'].includes(s.theme) ? s.theme : S.settings.theme, labels:s.labels !== false, anim:s.anim !== false, layout:s.layout === 'grid' ? 'grid' : 'circle'}};
+  return {nodes, rels, dropped, files, settings:{theme:['dark','light','system'].includes(s.theme) ? s.theme : S.settings.theme, labels:s.labels !== false, anim:s.anim !== false, layout:s.layout === 'grid' ? 'grid' : 'circle'}};
 }
 async function restoreFile(file) {
   if (!file) return; let data;
@@ -381,7 +439,9 @@ async function restoreFile(file) {
   catch (e) { return summary('Restore failed', e.message === 'version' ? 'This backup was made by an unsupported version of Sabyx Atlas.' : 'This file is not a valid Sabyx Atlas backup. Nothing was changed.'); }
   if (!(await ask(`Restoring this backup will replace your current Atlas data. (${data.nodes.length} nodes, ${data.rels.length} relationships)`, 'Restore', {label:'Back up current data first', fn:backupJSON}))) return;
   layout(data.nodes.filter(n => n.x == null));
-  if (!(await replaceAll(data.nodes, data.rels))) return;
+  const recs = [];
+  for (const f of data.files) { try { const blob = await (await fetch(f.data)).blob(); recs.push({id:f.id, nodeId:f.nodeId, name:String(f.name || 'file').slice(0, 200), type:f.type || blob.type, size:blob.size, blob, addedAt:f.addedAt || now()}); } catch (e) {} }
+  if (!(await replaceAll(data.nodes, data.rels, recs))) return;
   S.nodes = data.nodes; S.rels = data.rels; Object.assign(S.settings, data.settings); await saveSettings();
   S.sel = null; S.focus = null; S.fpos = null; applySettings(); renderAll(); fit(); toast('Backup restored');
   if (data.dropped) setTimeout(() => toast(`${data.dropped} invalid relationships ignored`), 400);
@@ -445,7 +505,8 @@ function syncFilterUI() {
 
 // UI
 function toast(msg, kind) {
-  const t = document.createElement('div'); t.className = 'toast' + (kind ? ' ' + kind : ''); t.textContent = msg; $('#toasts').appendChild(t);
+  const t = document.createElement('div'); t.className = 'toast' + (kind ? ' ' + kind : ''); t.textContent = msg; const c = $('#toasts'); c.appendChild(t);
+  try { c.hidePopover(); } catch (e) {} try { c.showPopover(); } catch (e) {}
   setTimeout(() => t.remove(), 3000);
 }
 const openDlg = d => { if (d.showModal) d.showModal(); else d.setAttribute('open', ''); };
@@ -470,16 +531,19 @@ function renderDetail() {
   <label>Type<select id="dType">${Object.keys(TYPES).map(t => `<option>${t}</option>`).join('')}</select></label>
   <label>Tags <span>comma separated</span><input id="dTags"></label>
   <label>Date<input type="date" id="dDate"></label>
+  ${fieldInputs(n.type, n.fields)}
+  <h3>Documents</h3><div id="dFiles" class="files"></div><button class="btn" data-a="upload">＋ Upload documents</button><input type="file" id="dUp" multiple hidden>
   <p class="meta" id="dMeta">${metaHtml(n)}</p>
   <h3>Connections (${cons.length})</h3>
   <ul class="cons">${cons.map(r => { const out = r.from === n.id, o = S.byId.get(out ? r.to : r.from); return `<li title="${out ? 'Outgoing' : 'Incoming'}"><span aria-hidden="true">${out ? '→' : '←'}</span><em>${escH(r.label)}</em><button class="lk" data-nid="${escH(o ? o.id : '')}">${escH(o ? o.name : '(missing)')}</button><button class="ib sm" data-rid="${escH(r.id)}" aria-label="Delete relationship"><i data-i="trash"></i></button></li>`; }).join('') || '<li class="mut">No connections yet.</li>'}</ul>
   <div class="acts2"><button class="btn" data-a="connect">Connect</button><button class="btn" data-a="focus">${S.focus ? 'Exit focus' : 'Focus'}</button><button class="btn danger" data-a="delete">Delete</button></div></div>`;
   $('#dName').value = n.name; $('#dDesc').value = n.description; $('#dType').value = n.type; $('#dTags').value = n.tags.join(', '); $('#dDate').value = n.date;
-  hydrate(d);
+  hydrate(d); loadFiles(n.id);
 }
 function refreshChrome() {
   const N = S.nodes.length, cnt = t => S.nodes.filter(n => n.type === t).length;
   $('#stats').innerHTML = [[N,'Nodes'],[S.rels.length,'Connections'],[cnt('Project'),'Projects'],[cnt('Person'),'People'],[cnt('Organization'),'Orgs']].map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+  $$('.nb[data-type]').forEach(b => { let c = $('.cn', b); if (!c) { c = document.createElement('span'); c.className = 'cn'; b.appendChild(c); } c.textContent = b.dataset.type ? cnt(b.dataset.type) : N; });
   $('#stats').hidden = !N; $('#empty').hidden = N > 0; $('#fbar').hidden = !N;
   const b = $('#banner'), from = S.byId.get(S.connectFrom);
   if (from) { b.hidden = false; b.innerHTML = `<span>Select a node to connect from “${escH(clip(from.name, 24))}”</span><button class="btn" id="bCancel">Cancel</button>`; }
@@ -505,14 +569,19 @@ let installEvt = null;
 function registerSW() {
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('service-worker.js').catch(() => {});
 }
-window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('#bInstall').hidden = false; });
-window.addEventListener('appinstalled', () => { $('#bInstall').hidden = true; toast('Sabyx Atlas installed'); });
+async function doInstall() {
+  if (!installEvt) return; installEvt.prompt(); try { await installEvt.userChoice; } catch (e) {}
+  installEvt = null; $('#bInstall').hidden = $('#bInstallTop').hidden = true;
+}
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('#bInstall').hidden = $('#bInstallTop').hidden = false; });
+window.addEventListener('appinstalled', () => { $('#bInstall').hidden = $('#bInstallTop').hidden = true; toast('Sabyx Atlas installed'); });
 
 // EVENTS
 function bindEvents() {
   $('#bMenu').onclick = () => { $('#side').classList.add('open'); $('#backdrop').classList.add('show'); };
   $('#backdrop').onclick = closeNav;
-  const addNode = () => { $('#fNode').reset(); openDlg($('#dlgNode')); $('#fNode').name.focus(); };
+  $('#dlgRel').addEventListener('close', () => { if (S.connectFrom) { S.connectFrom = null; refreshChrome(); } });
+  const addNode = () => { $('#fNode').reset(); $('#nFields').innerHTML = fieldInputs($('#nType').value); openDlg($('#dlgNode')); $('#fNode').elements['name'].focus(); };
   $('#bAdd').onclick = $('#eAdd').onclick = addNode;
   $('#bSearch').onclick = openPalette;
   $('#bImport').onclick = $('#eImport').onclick = $('#xImport').onclick = () => { $('#dlgData').close(); $('#fileCsv').click(); };
@@ -525,12 +594,13 @@ function bindEvents() {
   $('#fileJson').onchange = e => { restoreFile(e.target.files[0]); e.target.value = ''; };
   $('#sData').onclick = () => { $('#dlgSet').close(); openDlg($('#dlgData')); };
   $('#sClear').onclick = () => { $('#dlgSet').close(); clearAll(); };
-  $('#bInstall').onclick = async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('#bInstall').hidden = true; } };
+  $('#bInstall').onclick = $('#bInstallTop').onclick = doInstall;
   $('#fNode').onsubmit = e => {
-    e.preventDefault(); const f = e.target, name = f.name.value.trim(); if (!name) return f.name.focus();
-    createNode({name, description:f.description.value, type:f.type.value, tags:f.tags.value, date:f.date.value}); $('#dlgNode').close();
+    e.preventDefault(); const f = e.target, E = f.elements, name = E['name'].value.trim(); if (!name) return E['name'].focus();
+    createNode({name, description:E['description'].value, type:E['type'].value, tags:E['tags'].value, date:E['date'].value, fields:readFields($('#nFields'), E['type'].value), files:[...$('#nFiles').files]}); $('#dlgNode').close();
   };
   $('#nType').innerHTML = Object.keys(TYPES).map(t => `<option>${t}</option>`).join('');
+  $('#nType').onchange = () => { $('#nFields').innerHTML = fieldInputs($('#nType').value); };
   $('#fType').innerHTML += Object.keys(TYPES).map(t => `<option>${t}</option>`).join('');
   $('#rSel').onchange = e => { $('#rCustomL').hidden = e.target.value !== 'custom…'; if (!$('#rCustomL').hidden) $('#rCustom').focus(); };
   $('#fRel').onsubmit = async e => {
@@ -565,15 +635,18 @@ function bindEvents() {
     const n = S.byId.get(S.sel); if (!n) return; const v = e.target.value;
     if (e.target.id === 'dName') { if (!v.trim()) { e.target.value = n.name; return toast('Name cannot be empty.', 'err'); } updateNode(n, {name:v.trim()}); }
     else if (e.target.id === 'dDesc') updateNode(n, {description:v.trim()});
-    else if (e.target.id === 'dType') updateNode(n, {type:v});
+    else if (e.target.id === 'dType') updateNode(n, {type:v}).then(renderDetail);
     else if (e.target.id === 'dTags') updateNode(n, {tags:parseTags(v)});
     else if (e.target.id === 'dDate') updateNode(n, {date:v});
+    else if (e.target.dataset.f) { const f = {...n.fields, [e.target.dataset.f]:v.trim()}; if (!f[e.target.dataset.f]) delete f[e.target.dataset.f]; updateNode(n, {fields:f}); }
+    else if (e.target.id === 'dUp') { const list = [...e.target.files]; e.target.value = ''; addFiles(n.id, list).then(() => loadFiles(n.id)); }
   });
   d.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.fid) return fileAction(b.dataset.fid, b.dataset.fa);
     if (b.dataset.rid) return deleteRel(b.dataset.rid);
     if (b.dataset.nid) return select(b.dataset.nid, true);
-    ({close:() => select(null), connect:startConnect, focus:() => S.focus ? setFocus(null) : setFocus(S.sel), delete:() => deleteNode(S.sel)})[b.dataset.a]?.();
+    ({upload:() => $('#dUp').click(), close:() => select(null), connect:startConnect, focus:() => S.focus ? setFocus(null) : setFocus(S.sel), delete:() => deleteNode(S.sel)})[b.dataset.a]?.();
   });
   $('#pIn').oninput = () => { palIdx = 0; renderPal(); };
   $('#pIn').onkeydown = e => {

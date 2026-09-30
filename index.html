@@ -15,8 +15,9 @@
 <body>
 <header class="top">
   <button class="ib menu" id="bMenu" aria-label="Open navigation"><i data-i="menu"></i></button>
-  <div class="brand"><b>SABYX ATLAS</b><small>Your information, mapped.</small></div>
+  <img class="logo" src="icon-192.png" alt=""><div class="brand"><b>SABYX ATLAS</b><small>Your information, mapped.</small></div>
   <div class="acts">
+    <button class="ib" id="bInstallTop" aria-label="Install app" title="Install app" hidden><i data-i="app"></i></button>
     <button class="ib" id="bSearch" aria-label="Search (Ctrl+K)" title="Search (Ctrl+K)"><i data-i="search"></i></button>
     <button class="ib pri" id="bAdd" aria-label="Add node" title="Add node"><i data-i="plus"></i></button>
     <button class="ib" id="bImport" aria-label="Import CSV" title="Import CSV"><i data-i="up"></i></button>
@@ -91,6 +92,8 @@
   <label>Description<textarea name="description" rows="2" maxlength="1000"></textarea></label>
   <div class="two"><label>Type<select name="type" id="nType"></select></label><label>Date<input type="date" name="date"></label></div>
   <label>Tags <small class="mut">comma separated</small><input name="tags" autocomplete="off"></label>
+  <div id="nFields" class="fields"></div>
+  <label>Documents <small class="mut">optional, up to 25 MB each</small><input type="file" id="nFiles" multiple></label>
   <div class="row end"><button type="button" class="btn" data-close>Cancel</button><button class="btn pri">Create Node</button></div>
 </form></dialog>
 
@@ -123,6 +126,7 @@
     <p><b>Sabyx Atlas</b><br><span class="mut">Your information, mapped.</span></p>
     <p class="mut">Built by Sabyasachi Mondal<br>© 2026 Sabyx Labs<br>Your Atlas data is stored locally on this device.</p>
     <button class="btn" id="bInstall" hidden>Install app</button>
+    <p class="mut small">To install: use your browser’s “Install app” / “Add to Home screen” option (iPhone: Share → Add to Home Screen). Requires HTTPS, e.g. GitHub Pages.</p>
   </fieldset>
 </div></dialog>
 
@@ -159,7 +163,7 @@
 
 <input type="file" id="fileCsv" accept=".csv,text/csv" hidden>
 <input type="file" id="fileJson" accept=".json,application/json" hidden>
-<div id="toasts" aria-live="polite"></div>
+<div id="toasts" popover="manual" aria-live="polite"></div>
 <script src="app.js"></script>
 </body>
 </html>
